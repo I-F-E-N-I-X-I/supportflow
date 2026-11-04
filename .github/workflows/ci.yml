@@ -1,0 +1,47 @@
+name: SupportFlow CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: supportflow-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests and executable jars
+        run: ./gradlew --no-daemon test :api:bootJar :worker:bootJar
+      - name: Testcontainers PostgreSQL RabbitMQ Redis
+        run: ./gradlew --no-daemon :api:integrationTest :worker:integrationTest
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: '**/build/reports/tests/'
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate ephemeral credentials
+        run: sh scripts/init-env.sh
+      - name: Build and start all five services
+        run: docker compose up --build -d
+      - name: HTTP lifecycle and dependency outages
+        run: python3 scripts/smoke.py --resilience
+      - name: Diagnostics on failure
+        if: failure()
+        run: docker compose ps && docker compose logs --tail=100 api worker
+      - name: Stop ephemeral stack
+        if: always()
+        run: docker compose down -v
